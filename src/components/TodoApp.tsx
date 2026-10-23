@@ -11,12 +11,14 @@ import {
 
 type Filter = "all" | "active" | "done";
 
-type Removed = {
-  items: { todo: Todo; index: number }[];
+// 操作のたびに画面下に出すお知らせ。削除のときだけ「元に戻す」用のデータを持つ
+type Toast = {
   message: string;
+  removed?: { todo: Todo; index: number }[];
 };
 
 const MAX_LENGTH = 100;
+const TOAST_MS = 3000;
 const UNDO_MS = 6000;
 
 const FILTERS: { value: Filter; label: string }[] = [
@@ -36,16 +38,16 @@ export default function TodoApp() {
   const todos = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   const [title, setTitle] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
-  const [removed, setRemoved] = useState<Removed | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
   const [saveFailed, setSaveFailed] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // 「元に戻す」は数秒で自動的に消す
+  // お知らせは数秒で自動的に消す（「元に戻す」付きは押す時間を長めに）
   useEffect(() => {
-    if (!removed) return;
-    const timer = setTimeout(() => setRemoved(null), UNDO_MS);
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), toast.removed ? UNDO_MS : TOAST_MS);
     return () => clearTimeout(timer);
-  }, [removed]);
+  }, [toast]);
 
   const loading = todos === null;
   const list = todos ?? [];
@@ -73,13 +75,19 @@ export default function TodoApp() {
       ...list,
     ]);
     setTitle("");
+    setToast({ message: `「${trimmed}」を追加しました` });
     // 「完了」タブで追加すると見えなくなるので、未完了が見えるタブに戻す
     if (filter === "done") setFilter("all");
     inputRef.current?.focus();
   }
 
-  function handleToggle(id: string) {
-    commit(list.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+  function handleToggle(todo: Todo) {
+    commit(list.map((t) => (t.id === todo.id ? { ...t, done: !t.done } : t)));
+    setToast({
+      message: todo.done
+        ? `「${todo.title}」を未完了に戻しました`
+        : `「${todo.title}」を完了にしました`,
+    });
   }
 
   function removeWhere(match: (t: Todo) => boolean, message: string) {
@@ -88,7 +96,7 @@ export default function TodoApp() {
       .filter(({ todo }) => match(todo));
     if (items.length === 0) return;
     commit(list.filter((t) => !match(t)));
-    setRemoved({ items, message });
+    setToast({ message, removed: items });
   }
 
   function handleDelete(todo: Todo) {
@@ -100,14 +108,14 @@ export default function TodoApp() {
   }
 
   function handleUndo() {
-    if (!removed) return;
+    if (!toast?.removed) return;
     const next = [...list];
     // 元の位置に近い場所へ戻す（index の小さい順に差し込む）
-    for (const { todo, index } of removed.items) {
+    for (const { todo, index } of toast.removed) {
       next.splice(Math.min(index, next.length), 0, todo);
     }
     commit(next);
-    setRemoved(null);
+    setToast({ message: "元に戻しました" });
   }
 
   return (
@@ -124,7 +132,7 @@ export default function TodoApp() {
       </header>
 
       <form onSubmit={handleAdd} className="mb-6">
-        <label htmlFor="new-todo" className="mb-2 block text-sm font-semibold text-ink">
+        <label htmlFor="new-todo" className="mb-2 block text-base font-semibold text-ink">
           新しいタスク
         </label>
         <div className="flex gap-2">
@@ -148,10 +156,13 @@ export default function TodoApp() {
             追加
           </button>
         </div>
-        <p id="new-todo-hint" className="mt-2 flex justify-between text-sm text-ink-soft">
-          <span>Enterキーでも追加できます</span>
-          <span className={title.length >= MAX_LENGTH - 10 ? "font-semibold text-danger" : ""}>
-            {title.length}/{MAX_LENGTH}
+        <p id="new-todo-hint" className="mt-2 flex justify-between gap-3 text-base text-ink-soft">
+          <span>{trimmed ? "Enterキーでも追加できます" : "文字を入れると追加できます"}</span>
+          {/* 上限が近いときは色だけでなく「あと○文字」の言葉でも知らせる */}
+          <span className={`shrink-0 ${title.length >= MAX_LENGTH - 10 ? "font-semibold text-danger" : ""}`}>
+            {title.length >= MAX_LENGTH - 10
+              ? `⚠ あと${MAX_LENGTH - title.length}文字`
+              : `${title.length}/${MAX_LENGTH}`}
           </span>
         </p>
       </form>
@@ -175,6 +186,8 @@ export default function TodoApp() {
                 : "border-line bg-surface text-ink-soft hover:border-ink-faint"
             }`}
           >
+            {/* 選択中は色の反転に加えて ✓ の形でも示す */}
+            {filter === value && <span aria-hidden className="mr-1">✓</span>}
             {label}
             <span className="ml-1 tabular-nums">{counts[value]}</span>
           </button>
@@ -200,7 +213,7 @@ export default function TodoApp() {
                 <input
                   type="checkbox"
                   checked={todo.done}
-                  onChange={() => handleToggle(todo.id)}
+                  onChange={() => handleToggle(todo)}
                   className="size-6 shrink-0 cursor-pointer accent-accent"
                 />
                 <span
@@ -241,16 +254,18 @@ export default function TodoApp() {
         aria-live="polite"
         className="pointer-events-none fixed inset-x-0 bottom-0 flex justify-center px-4 pb-6"
       >
-        {removed && (
-          <div className="pointer-events-auto flex w-full max-w-xl items-center justify-between gap-3 rounded-xl bg-ink px-4 py-3 text-surface shadow-lg">
-            <span className="min-w-0 truncate text-base">{removed.message}</span>
-            <button
-              type="button"
-              onClick={handleUndo}
-              className="min-h-11 shrink-0 rounded-lg bg-surface px-4 text-base font-bold text-ink hover:bg-line"
-            >
-              元に戻す
-            </button>
+        {toast && (
+          <div className="pointer-events-auto flex min-h-14 w-full max-w-xl items-center justify-between gap-3 rounded-xl bg-ink px-4 py-2 text-surface shadow-lg">
+            <span className="min-w-0 truncate text-base">{toast.message}</span>
+            {toast.removed && (
+              <button
+                type="button"
+                onClick={handleUndo}
+                className="min-h-11 shrink-0 rounded-lg bg-surface px-4 text-base font-bold text-ink hover:bg-line"
+              >
+                元に戻す
+              </button>
+            )}
           </div>
         )}
       </div>
