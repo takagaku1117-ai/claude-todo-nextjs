@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   getServerSnapshot,
   getSnapshot,
+  parseTodos,
   saveTodos,
   subscribe,
   type Todo,
@@ -44,6 +45,7 @@ export default function TodoApp() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   // お知らせは数秒で自動的に消す（「元に戻す」付きは押す時間を長めに）
   useEffect(() => {
@@ -128,6 +130,38 @@ export default function TodoApp() {
 
   function handleClearDone() {
     removeWhere((t) => t.done, `完了済みの${doneCount}件を削除しました`);
+  }
+
+  // 別のブラウザやスマホへ引っ越せるように、今のタスクをファイルにする
+  function handleExport() {
+    const blob = new Blob([JSON.stringify(list, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `やることリスト_${new Date().toLocaleDateString("sv-SE")}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setToast({ message: `${list.length}件をファイルに書き出しました` });
+  }
+
+  async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    // 同じファイルをもう一度選んでも反応するように空にしておく
+    e.target.value = "";
+    if (!file) return;
+    const imported = parseTodos(await file.text());
+    if (!imported) {
+      setToast({ message: "✕ このアプリで書き出したファイルではないようです" });
+      return;
+    }
+    // 今のタスクは消さずに足す。同じタスク（同じid）は重ねない
+    const ids = new Set(list.map((t) => t.id));
+    const added = imported.filter((t) => !ids.has(t.id));
+    commit([...list, ...added].sort((a, b) => b.createdAt - a.createdAt));
+    const skipped = imported.length - added.length;
+    setToast({
+      message: `${added.length}件を読み込みました${skipped ? `（同じタスク${skipped}件はそのまま）` : ""}`,
+    });
   }
 
   function handleUndo() {
@@ -321,6 +355,44 @@ export default function TodoApp() {
         </div>
       )}
 
+      {!loading && (
+        <section aria-labelledby="move-heading" className="mt-10 rounded-xl border-2 border-line bg-surface p-4">
+          <h2 id="move-heading" className="text-lg font-bold text-ink">
+            データの引っ越し
+          </h2>
+          <p className="mt-1 text-base text-ink-soft">
+            タスクはこのブラウザの中だけに保存されます。別のブラウザやスマホで使うときは、ファイルに書き出して、向こうで読み込んでください。
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={list.length === 0}
+              className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border-2 border-line px-4 text-base font-semibold text-ink hover:border-ink-faint disabled:cursor-not-allowed disabled:text-ink-faint"
+            >
+              <DownloadIcon />
+              ファイルに書き出す
+            </button>
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border-2 border-line px-4 text-base font-semibold text-ink hover:border-ink-faint"
+            >
+              <UploadIcon />
+              ファイルから読み込む
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/json,.json"
+              onChange={handleImport}
+              className="hidden"
+              aria-label="読み込むファイル"
+            />
+          </div>
+        </section>
+      )}
+
       <div
         aria-live="polite"
         className="pointer-events-none fixed inset-x-0 bottom-0 flex justify-center px-4 pb-6"
@@ -373,6 +445,22 @@ function EmptyState({
         </button>
       )}
     </div>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3v12M7 10l5 5 5-5M4 21h16" />
+    </svg>
+  );
+}
+
+function UploadIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 15V3M7 8l5-5 5 5M4 21h16" />
+    </svg>
   );
 }
 

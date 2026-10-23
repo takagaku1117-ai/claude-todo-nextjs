@@ -29,11 +29,21 @@ function readStorage(): Todo[] {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
     // 壊れたデータが混ざっていても、読める分だけ使う
-    return Array.isArray(parsed) ? parsed.filter(isTodo) : [];
+    return parseTodos(raw) ?? [];
   } catch {
     return [];
+  }
+}
+
+/** 書き出したファイルの中身から Todo を取り出す。形が違うファイルなら null */
+export function parseTodos(text: string): Todo[] | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter(isTodo);
+  } catch {
+    return null;
   }
 }
 
