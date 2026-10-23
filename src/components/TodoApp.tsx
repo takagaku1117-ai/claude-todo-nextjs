@@ -399,7 +399,7 @@ export default function TodoApp() {
       >
         {toast && (
           <div className="pointer-events-auto flex min-h-14 w-full max-w-xl items-center justify-between gap-3 rounded-xl bg-ink px-4 py-2 text-surface shadow-lg">
-            <span className="min-w-0 truncate text-base">{toast.message}</span>
+            <span className="min-w-0 break-words text-base">{toast.message}</span>
             {toast.removed && (
               <button
                 type="button"
