@@ -40,6 +40,9 @@ export default function TodoApp() {
   const [filter, setFilter] = useState<Filter>("all");
   const [toast, setToast] = useState<Toast | null>(null);
   const [saveFailed, setSaveFailed] = useState(false);
+  // 編集中のタスクのidと、入力途中の文字。null のときは何も編集していない
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   // お知らせは数秒で自動的に消す（「元に戻す」付きは押す時間を長めに）
@@ -88,6 +91,26 @@ export default function TodoApp() {
         ? `「${todo.title}」を未完了に戻しました`
         : `「${todo.title}」を完了にしました`,
     });
+  }
+
+  function startEdit(todo: Todo) {
+    setEditingId(todo.id);
+    setDraft(todo.title);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+  }
+
+  function handleSaveEdit(e: React.FormEvent, todo: Todo) {
+    e.preventDefault();
+    const nextTitle = draft.trim();
+    if (!nextTitle) return;
+    setEditingId(null);
+    // 何も変えずに保存したときは、保存もお知らせもしない
+    if (nextTitle === todo.title) return;
+    commit(list.map((t) => (t.id === todo.id ? { ...t, title: nextTitle } : t)));
+    setToast({ message: `「${nextTitle}」に変更しました` });
   }
 
   function removeWhere(match: (t: Todo) => boolean, message: string) {
@@ -204,37 +227,85 @@ export default function TodoApp() {
         <EmptyState filter={filter} hasAny={list.length > 0} onFocusInput={() => inputRef.current?.focus()} />
       ) : (
         <ul className="space-y-2">
-          {visible.map((todo) => (
-            <li
-              key={todo.id}
-              className="flex items-center gap-1 rounded-xl border-2 border-line bg-surface pr-1"
-            >
-              <label className="flex min-h-16 flex-1 cursor-pointer items-center gap-3 px-4 py-3">
-                <input
-                  type="checkbox"
-                  checked={todo.done}
-                  onChange={() => handleToggle(todo)}
-                  className="size-6 shrink-0 cursor-pointer accent-accent"
-                />
-                <span
-                  className={`break-all text-lg ${
-                    todo.done ? "text-ink-faint line-through" : "text-ink"
-                  }`}
-                >
-                  {todo.title}
-                </span>
-              </label>
-              <button
-                type="button"
-                onClick={() => handleDelete(todo)}
-                aria-label={`「${todo.title}」を削除`}
-                className="flex min-h-12 shrink-0 items-center gap-1 rounded-lg px-3 text-base font-semibold text-danger hover:bg-danger-soft"
+          {visible.map((todo) =>
+            editingId === todo.id ? (
+              <li key={todo.id} className="rounded-xl border-2 border-accent bg-surface p-3">
+                <form onSubmit={(e) => handleSaveEdit(e, todo)}>
+                  <label htmlFor={`edit-${todo.id}`} className="mb-2 block text-base font-semibold text-ink">
+                    タスクを編集
+                  </label>
+                  <input
+                    id={`edit-${todo.id}`}
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") cancelEdit();
+                    }}
+                    maxLength={MAX_LENGTH}
+                    autoFocus
+                    autoComplete="off"
+                    enterKeyHint="done"
+                    className="min-h-12 w-full rounded-xl border-2 border-line bg-surface px-4 text-lg text-ink focus:border-accent focus:outline-none"
+                  />
+                  <div className="mt-3 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={cancelEdit}
+                      className="min-h-11 rounded-lg border-2 border-line px-4 text-base font-semibold text-ink-soft hover:border-ink-faint"
+                    >
+                      キャンセル
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={!draft.trim()}
+                      className="min-h-11 rounded-lg bg-accent px-4 text-base font-bold text-white hover:bg-accent-strong disabled:cursor-not-allowed disabled:bg-line disabled:text-ink-faint"
+                    >
+                      保存
+                    </button>
+                  </div>
+                </form>
+              </li>
+            ) : (
+              <li
+                key={todo.id}
+                className="flex items-center gap-1 rounded-xl border-2 border-line bg-surface pr-1"
               >
-                <TrashIcon />
-                <span className="hidden sm:inline">削除</span>
-              </button>
-            </li>
-          ))}
+                <label className="flex min-h-16 flex-1 cursor-pointer items-center gap-3 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={todo.done}
+                    onChange={() => handleToggle(todo)}
+                    className="size-6 shrink-0 cursor-pointer accent-accent"
+                  />
+                  <span
+                    className={`break-all text-lg ${
+                      todo.done ? "text-ink-faint line-through" : "text-ink"
+                    }`}
+                  >
+                    {todo.title}
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => startEdit(todo)}
+                  aria-label={`「${todo.title}」を編集`}
+                  className="flex min-h-12 shrink-0 items-center gap-1 rounded-lg px-3 text-base font-semibold text-ink-soft hover:bg-line/50"
+                >
+                  <PencilIcon />
+                  <span className="hidden sm:inline">編集</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDelete(todo)}
+                  aria-label={`「${todo.title}」を削除`}
+                  className="flex min-h-12 shrink-0 items-center gap-1 rounded-lg px-3 text-base font-semibold text-danger hover:bg-danger-soft"
+                >
+                  <TrashIcon />
+                  <span className="hidden sm:inline">削除</span>
+                </button>
+              </li>
+            ),
+          )}
         </ul>
       )}
 
@@ -302,6 +373,14 @@ function EmptyState({
         </button>
       )}
     </div>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
   );
 }
 
