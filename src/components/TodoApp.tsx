@@ -48,6 +48,14 @@ function getServerToday() {
   return "";
 }
 
+// "2026-10-24" の n 日後（マイナスなら前）の日付
+function addDays(key: string, n: number) {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"];
+
 function daysBetween(from: string, to: string) {
   return Math.round((Date.parse(to) - Date.parse(from)) / 86400000);
 }
@@ -120,6 +128,29 @@ export default function TodoApp() {
   // 今日の達成：今日完了にした数 ／（それ ＋ まだ残っている数）
   const doneToday = list.filter((t) => t.done && t.doneAt && dateKey(t.doneAt) === today).length;
   const todayTotal = doneToday + activeCount;
+  // この7日間に完了した数（完了時刻 doneAt を日付ごとに数える）
+  const doneByDate = new Map<string, number>();
+  for (const t of list) {
+    if (!t.done || !t.doneAt) continue;
+    const date = dateKey(t.doneAt);
+    doneByDate.set(date, (doneByDate.get(date) ?? 0) + 1);
+  }
+  // サーバーで作るときは today が空なので、日付の計算はブラウザに来てから
+  const week = !today
+    ? []
+    : Array.from({ length: 7 }, (_, i) => {
+        const date = addDays(today, i - 6);
+        return { date, count: doneByDate.get(date) ?? 0 };
+      });
+  // 連続日数：今日から1日ずつさかのぼる。今日がまだ0件なら、昨日までの連続を数える
+  let streak = 0;
+  if (today) {
+    let d = doneByDate.has(today) ? today : addDays(today, -1);
+    while (doneByDate.has(d)) {
+      streak++;
+      d = addDays(d, -1);
+    }
+  }
 
   function commit(next: Todo[]) {
     setSaveFailed(!saveTodos(next));
@@ -255,8 +286,8 @@ export default function TodoApp() {
               ? "まだタスクはありません"
               : `残り ${activeCount} 件 ／ 全 ${list.length} 件`}
         </p>
-        {!loading && todayTotal > 0 && (
-          <TodayProgress done={doneToday} total={todayTotal} />
+        {!loading && (todayTotal > 0 || week.some((w) => w.count > 0)) && (
+          <TodayProgress done={doneToday} total={todayTotal} week={week} streak={streak} today={today} />
         )}
       </header>
 
@@ -554,8 +585,21 @@ export default function TodoApp() {
   );
 }
 
-function TodayProgress({ done, total }: { done: number; total: number }) {
-  const percent = Math.round((done / total) * 100);
+function TodayProgress({
+  done,
+  total,
+  week,
+  streak,
+  today,
+}: {
+  done: number;
+  total: number;
+  week: { date: string; count: number }[];
+  streak: number;
+  today: string;
+}) {
+  const percent = total === 0 ? 0 : Math.round((done / total) * 100);
+  const most = Math.max(...week.map((w) => w.count), 1);
   return (
     <div className="mt-4 rounded-xl border-2 border-line bg-surface p-4">
       <div className="flex items-baseline justify-between gap-3">
@@ -575,12 +619,45 @@ function TodayProgress({ done, total }: { done: number; total: number }) {
         <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${percent}%` }} />
       </div>
       <p className="mt-2 text-base text-ink-soft">
-        {done === total
+        {total === 0
+          ? "残っているタスクはありません"
+          : done === total
           ? "🎉 今日のぶんは全部おわり！おつかれさまでした"
           : done === 0
             ? "1つ終わらせると、ここが伸びていきます"
             : `あと ${total - done} 件。いい調子です`}
       </p>
+
+      <div className="mt-4 border-t-2 border-line pt-3">
+        <div className="flex items-baseline justify-between gap-3">
+          <p className="text-base font-semibold text-ink">この7日間</p>
+          <p className="text-base text-ink-soft">
+            {streak > 0 ? `🔥 ${streak}日連続で達成中` : "今日1つ終わらせると記録スタート"}
+          </p>
+        </div>
+        {/* 数字も棒の上に書いて、棒の高さだけに頼らない */}
+        <ol className="mt-2 grid grid-cols-7 gap-1 text-center" aria-label="この7日間に完了した数">
+          {week.map(({ date, count }) => {
+            const [y, m, d] = date.split("-").map(Number);
+            const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+            const isToday = date === today;
+            return (
+              <li key={date} aria-label={`${m}月${d}日 ${count}件`} className="flex flex-col items-center">
+                <span className="text-base font-semibold tabular-nums text-ink">{count}</span>
+                <span className="flex h-12 w-full items-end justify-center">
+                  <span
+                    className={`w-5 rounded-t ${count > 0 ? "bg-accent" : "bg-line/60"}`}
+                    style={{ height: `${count > 0 ? Math.max((count / most) * 100, 12) : 6}%` }}
+                  />
+                </span>
+                <span className={`mt-1 text-base ${isToday ? "font-bold text-ink" : "text-ink-soft"}`}>
+                  {isToday ? "今日" : weekday}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      </div>
     </div>
   );
 }
