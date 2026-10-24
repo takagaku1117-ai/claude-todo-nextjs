@@ -7,6 +7,10 @@ export type Todo = {
   title: string;
   done: boolean;
   createdAt: number;
+  // 以下は後から足した項目。古いデータには無いので省略できるようにしておく
+  due?: string; // 期日 "2026-10-30"
+  important?: boolean;
+  doneAt?: number; // 完了にした時刻（今日の達成数を数えるのに使う）
 };
 
 const STORAGE_KEY = "claude-todo:v1";
@@ -21,7 +25,10 @@ function isTodo(value: unknown): value is Todo {
     typeof t.id === "string" &&
     typeof t.title === "string" &&
     typeof t.done === "boolean" &&
-    typeof t.createdAt === "number"
+    typeof t.createdAt === "number" &&
+    (t.due === undefined || typeof t.due === "string") &&
+    (t.important === undefined || typeof t.important === "boolean") &&
+    (t.doneAt === undefined || typeof t.doneAt === "number")
   );
 }
 

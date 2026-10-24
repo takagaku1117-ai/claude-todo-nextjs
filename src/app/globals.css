@@ -12,6 +12,9 @@
   --accent-strong: #1b45a0;
   --danger: #b42318;
   --danger-soft: #fdecea;
+  --warn: #9a3d06;
+  --warn-soft: #fff1e0;
+  --star: #b7791f;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -26,6 +29,9 @@
     --accent-strong: #7aa2f5;
     --danger: #ff8a7a;
     --danger-soft: #3b2220;
+    --warn: #fdba74;
+    --warn-soft: #3a2a17;
+    --star: #f6c343;
   }
 }
 
@@ -40,6 +46,9 @@
   --color-accent-strong: var(--accent-strong);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-star: var(--star);
   --font-sans: var(--font-noto-sans-jp), "Hiragino Sans", "Yu Gothic", sans-serif;
 }
 

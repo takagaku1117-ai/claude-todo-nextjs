@@ -28,6 +28,53 @@ const FILTERS: { value: Filter; label: string }[] = [
   { value: "done", label: "完了" },
 ];
 
+// ブラウザの時計での今日の日付 "2026-10-24"
+function dateKey(time: number) {
+  return new Date(time).toLocaleDateString("sv-SE");
+}
+
+// 「今日」も時計という外の値なので、Todo と同じく useSyncExternalStore で読む。
+// 1分ごとに見直すので、開いたまま日付をまたいでも切り替わる
+function subscribeToday(onChange: () => void) {
+  const timer = setInterval(onChange, 60000);
+  return () => clearInterval(timer);
+}
+
+function getToday() {
+  return dateKey(Date.now());
+}
+
+function getServerToday() {
+  return "";
+}
+
+function daysBetween(from: string, to: string) {
+  return Math.round((Date.parse(to) - Date.parse(from)) / 86400000);
+}
+
+// 期日のラベル。期限切れは赤、今日・明日はオレンジ。色だけでなく言葉でも分かるようにする
+function dueBadge(due: string, today: string) {
+  const diff = daysBetween(today, due);
+  const [, m, d] = due.split("-").map(Number);
+  if (diff < 0) return { text: `⚠ 期限切れ（${m}/${d}）`, className: "border-danger bg-danger-soft text-danger" };
+  if (diff === 0) return { text: "⏰ 今日まで", className: "border-warn bg-warn-soft text-warn" };
+  if (diff === 1) return { text: "明日まで", className: "border-warn bg-warn-soft text-warn" };
+  return { text: `${m}/${d}まで`, className: "border-line bg-background text-ink-soft" };
+}
+
+// 並び順：未完了が先。その中で 重要 → 期日が近い → 期日なし。
+// 同じ条件なら元の順番（新しい順）のまま
+function byPriority(a: Todo, b: Todo) {
+  if (a.done !== b.done) return a.done ? 1 : -1;
+  if (!!a.important !== !!b.important) return a.important ? -1 : 1;
+  if (a.due !== b.due) {
+    if (!a.due) return 1;
+    if (!b.due) return -1;
+    return a.due < b.due ? -1 : 1;
+  }
+  return 0;
+}
+
 function newId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -37,13 +84,16 @@ function newId() {
 
 export default function TodoApp() {
   const todos = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const today = useSyncExternalStore(subscribeToday, getToday, getServerToday);
   const [title, setTitle] = useState("");
+  const [due, setDue] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [toast, setToast] = useState<Toast | null>(null);
   const [saveFailed, setSaveFailed] = useState(false);
   // 編集中のタスクのidと、入力途中の文字。null のときは何も編集していない
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [draftDue, setDraftDue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -64,9 +114,12 @@ export default function TodoApp() {
     active: activeCount,
     done: doneCount,
   };
-  const visible = list.filter((t) =>
-    filter === "all" ? true : filter === "active" ? !t.done : t.done,
-  );
+  const visible = list
+    .filter((t) => (filter === "all" ? true : filter === "active" ? !t.done : t.done))
+    .sort(byPriority);
+  // 今日の達成：今日完了にした数 ／（それ ＋ まだ残っている数）
+  const doneToday = list.filter((t) => t.done && t.doneAt && dateKey(t.doneAt) === today).length;
+  const todayTotal = doneToday + activeCount;
 
   function commit(next: Todo[]) {
     setSaveFailed(!saveTodos(next));
@@ -76,10 +129,11 @@ export default function TodoApp() {
     e.preventDefault();
     if (!trimmed) return;
     commit([
-      { id: newId(), title: trimmed, done: false, createdAt: Date.now() },
+      { id: newId(), title: trimmed, done: false, createdAt: Date.now(), ...(due && { due }) },
       ...list,
     ]);
     setTitle("");
+    setDue("");
     setToast({ message: `「${trimmed}」を追加しました` });
     // 「完了」タブで追加すると見えなくなるので、未完了が見えるタブに戻す
     if (filter === "done") setFilter("all");
@@ -87,7 +141,11 @@ export default function TodoApp() {
   }
 
   function handleToggle(todo: Todo) {
-    commit(list.map((t) => (t.id === todo.id ? { ...t, done: !t.done } : t)));
+    commit(
+      list.map((t) =>
+        t.id === todo.id ? { ...t, done: !t.done, doneAt: t.done ? undefined : Date.now() } : t,
+      ),
+    );
     setToast({
       message: todo.done
         ? `「${todo.title}」を未完了に戻しました`
@@ -95,9 +153,19 @@ export default function TodoApp() {
     });
   }
 
+  function handleToggleImportant(todo: Todo) {
+    commit(list.map((t) => (t.id === todo.id ? { ...t, important: !t.important } : t)));
+    setToast({
+      message: todo.important
+        ? `「${todo.title}」の重要マークを外しました`
+        : `「${todo.title}」を重要にしました（上に表示されます）`,
+    });
+  }
+
   function startEdit(todo: Todo) {
     setEditingId(todo.id);
     setDraft(todo.title);
+    setDraftDue(todo.due ?? "");
   }
 
   function cancelEdit() {
@@ -109,10 +177,11 @@ export default function TodoApp() {
     const nextTitle = draft.trim();
     if (!nextTitle) return;
     setEditingId(null);
+    const nextDue = draftDue || undefined;
     // 何も変えずに保存したときは、保存もお知らせもしない
-    if (nextTitle === todo.title) return;
-    commit(list.map((t) => (t.id === todo.id ? { ...t, title: nextTitle } : t)));
-    setToast({ message: `「${nextTitle}」に変更しました` });
+    if (nextTitle === todo.title && nextDue === todo.due) return;
+    commit(list.map((t) => (t.id === todo.id ? { ...t, title: nextTitle, due: nextDue } : t)));
+    setToast({ message: `「${nextTitle}」を変更しました` });
   }
 
   function removeWhere(match: (t: Todo) => boolean, message: string) {
@@ -186,6 +255,9 @@ export default function TodoApp() {
               ? "まだタスクはありません"
               : `残り ${activeCount} 件 ／ 全 ${list.length} 件`}
         </p>
+        {!loading && todayTotal > 0 && (
+          <TodayProgress done={doneToday} total={todayTotal} />
+        )}
       </header>
 
       <form onSubmit={handleAdd} className="mb-6">
@@ -222,6 +294,28 @@ export default function TodoApp() {
               : `${title.length}/${MAX_LENGTH}`}
           </span>
         </p>
+        <div className="mt-3 flex items-center gap-3">
+          <label htmlFor="new-due" className="shrink-0 text-base font-semibold text-ink">
+            期日<span className="ml-1 font-normal text-ink-soft">（なくてもOK）</span>
+          </label>
+          <input
+            id="new-due"
+            type="date"
+            value={due}
+            min={today}
+            onChange={(e) => setDue(e.target.value)}
+            className="min-h-11 min-w-0 flex-1 rounded-xl border-2 border-line bg-surface px-3 text-base text-ink focus:border-accent focus:outline-none"
+          />
+          {due && (
+            <button
+              type="button"
+              onClick={() => setDue("")}
+              className="min-h-11 shrink-0 rounded-lg px-3 text-base font-semibold text-ink-soft underline underline-offset-4"
+            >
+              消す
+            </button>
+          )}
+        </div>
       </form>
 
       {saveFailed && (
@@ -281,6 +375,27 @@ export default function TodoApp() {
                     enterKeyHint="done"
                     className="min-h-12 w-full rounded-xl border-2 border-line bg-surface px-4 text-lg text-ink focus:border-accent focus:outline-none"
                   />
+                  <div className="mt-3 flex items-center gap-3">
+                    <label htmlFor={`edit-due-${todo.id}`} className="shrink-0 text-base font-semibold text-ink">
+                      期日
+                    </label>
+                    <input
+                      id={`edit-due-${todo.id}`}
+                      type="date"
+                      value={draftDue}
+                      onChange={(e) => setDraftDue(e.target.value)}
+                      className="min-h-11 min-w-0 flex-1 rounded-xl border-2 border-line bg-surface px-3 text-base text-ink focus:border-accent focus:outline-none"
+                    />
+                    {draftDue && (
+                      <button
+                        type="button"
+                        onClick={() => setDraftDue("")}
+                        className="min-h-11 shrink-0 rounded-lg px-3 text-base font-semibold text-ink-soft underline underline-offset-4"
+                      >
+                        消す
+                      </button>
+                    )}
+                  </div>
                   <div className="mt-3 flex justify-end gap-2">
                     <button
                       type="button"
@@ -302,21 +417,44 @@ export default function TodoApp() {
             ) : (
               <li
                 key={todo.id}
-                className="flex items-center gap-1 rounded-xl border-2 border-line bg-surface pr-1"
+                className={`flex items-center gap-1 rounded-xl border-2 bg-surface pr-1 ${
+                  todo.important && !todo.done ? "border-star" : "border-line"
+                }`}
               >
-                <label className="flex min-h-16 flex-1 cursor-pointer items-center gap-3 px-4 py-3">
+                <button
+                  type="button"
+                  onClick={() => handleToggleImportant(todo)}
+                  aria-pressed={!!todo.important}
+                  aria-label={`「${todo.title}」を重要にする`}
+                  className={`flex min-h-12 min-w-11 shrink-0 items-center justify-center rounded-lg pl-1 text-2xl leading-none hover:bg-line/50 ${
+                    todo.important ? "text-star" : "text-ink-faint"
+                  }`}
+                >
+                  {/* 塗りつぶし★と枠だけ☆の形でも区別する */}
+                  <span aria-hidden>{todo.important ? "★" : "☆"}</span>
+                </button>
+                <label className="flex min-h-16 flex-1 cursor-pointer items-center gap-3 py-3 pr-2">
                   <input
                     type="checkbox"
                     checked={todo.done}
                     onChange={() => handleToggle(todo)}
                     className="size-6 shrink-0 cursor-pointer accent-accent"
                   />
-                  <span
-                    className={`break-all text-lg ${
-                      todo.done ? "text-ink-faint line-through" : "text-ink"
-                    }`}
-                  >
-                    {todo.title}
+                  <span className="min-w-0">
+                    <span
+                      className={`block break-all text-lg ${
+                        todo.done ? "text-ink-faint line-through" : "text-ink"
+                      }`}
+                    >
+                      {todo.title}
+                    </span>
+                    {todo.due && !todo.done && (
+                      <span
+                        className={`mt-1 inline-block rounded-md border px-2 text-base font-semibold ${dueBadge(todo.due, today).className}`}
+                      >
+                        {dueBadge(todo.due, today).text}
+                      </span>
+                    )}
                   </span>
                 </label>
                 <button
@@ -413,6 +551,37 @@ export default function TodoApp() {
         )}
       </div>
     </main>
+  );
+}
+
+function TodayProgress({ done, total }: { done: number; total: number }) {
+  const percent = Math.round((done / total) * 100);
+  return (
+    <div className="mt-4 rounded-xl border-2 border-line bg-surface p-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-base font-semibold text-ink">今日の達成</p>
+        <p className="text-base text-ink-soft">
+          <span className="text-2xl font-bold tabular-nums text-ink">{done}</span> / {total} 件
+        </p>
+      </div>
+      <div
+        role="progressbar"
+        aria-label="今日の達成"
+        aria-valuemin={0}
+        aria-valuemax={total}
+        aria-valuenow={done}
+        className="mt-2 h-3 overflow-hidden rounded-full bg-line/60"
+      >
+        <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${percent}%` }} />
+      </div>
+      <p className="mt-2 text-base text-ink-soft">
+        {done === total
+          ? "🎉 今日のぶんは全部おわり！おつかれさまでした"
+          : done === 0
+            ? "1つ終わらせると、ここが伸びていきます"
+            : `あと ${total - done} 件。いい調子です`}
+      </p>
+    </div>
   );
 }
 
